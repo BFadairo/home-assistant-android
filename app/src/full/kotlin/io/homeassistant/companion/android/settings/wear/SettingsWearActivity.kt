@@ -5,13 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.concurrent.futures.await
-import androidx.core.net.toUri
-import androidx.core.view.isInvisible
-import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -22,10 +20,9 @@ import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.Wearable
 import dagger.hilt.android.AndroidEntryPoint
 import io.homeassistant.companion.android.common.R as commonR
-import io.homeassistant.companion.android.databinding.ActivitySettingsWearBinding
-import io.homeassistant.companion.android.settings.HelpMenuProvider
 import io.homeassistant.companion.android.settings.wear.views.SettingsWearMainView
-import io.homeassistant.companion.android.util.applySafeDrawingInsets
+import io.homeassistant.companion.android.settings.wear.views.SettingsWearOnboardingView
+import io.homeassistant.companion.android.util.compose.HomeAssistantAppTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -36,7 +33,6 @@ class SettingsWearActivity :
     CapabilityClient.OnCapabilityChangedListener {
 
     private val settingsWearViewModel by viewModels<SettingsWearViewModel>()
-    private lateinit var binding: ActivitySettingsWearBinding
 
     private var capabilityClient: CapabilityClient? = null
     private var nodeClient: NodeClient? = null
@@ -47,12 +43,21 @@ class SettingsWearActivity :
 
         enableEdgeToEdge()
 
-        binding = ActivitySettingsWearBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-        binding.root.applySafeDrawingInsets()
+        setContent {
+            HomeAssistantAppTheme {
+                SettingsWearOnboardingView(
+                    settingsWearViewModel,
+                    onInstallOnWearDeviceClicked = {
+                        openPlayStoreOnWearDevicesWithoutApp()
+                    },
+                    onFinishInstallOnDevices = {
+                        openWearDeviceSettings()
+                    },
+                    onBackClicked = { onBackPressedDispatcher.onBackPressed() },
+                )
+            }
+        }
 
-        setSupportActionBar(binding.toolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
         capabilityClient = try {
             Wearable.getCapabilityClient(this)
         } catch (e: Exception) {
@@ -71,15 +76,6 @@ class SettingsWearActivity :
             Timber.e(e, "Unable to get remote activity helper")
             null
         }
-
-        binding.remoteOpenButton.setOnClickListener {
-            openPlayStoreOnWearDevicesWithoutApp()
-        }
-
-        addMenuProvider(HelpMenuProvider("https://companion.home-assistant.io/docs/wear-os/wear-os".toUri()))
-
-        // Perform the initial update of the UI
-        updateUI()
 
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -105,7 +101,6 @@ class SettingsWearActivity :
 
     override fun onResume() {
         super.onResume()
-        title = getString(commonR.string.wear_os_settings_title)
         capabilityClient?.addListener(this, CAPABILITY_WEAR_APP)
     }
 
@@ -120,45 +115,12 @@ class SettingsWearActivity :
         }
     }
 
-    private fun updateUI() {
-        val wearNodesWithApp = settingsWearViewModel.wearNodesWithApp.value
-        val allConnectedNodes = settingsWearViewModel.allConnectedNodes.value
-
-        when {
-            wearNodesWithApp == null || allConnectedNodes == null -> {
-                Timber.d("Waiting on Results for both connected nodes and nodes with app")
-                binding.informationTextView.text = getString(commonR.string.message_checking)
-                binding.remoteOpenButton.isInvisible = true
-            }
-
-            allConnectedNodes.isEmpty() -> {
-                Timber.d("No devices")
-                binding.informationTextView.text = getString(commonR.string.message_no_connected_nodes)
-                binding.remoteOpenButton.isInvisible = true
-            }
-
-            wearNodesWithApp.isEmpty() -> {
-                Timber.d("Missing on all devices")
-                binding.informationTextView.text = getString(commonR.string.message_missing_all)
-                binding.remoteOpenButton.isVisible = true
-            }
-
-            wearNodesWithApp.size < allConnectedNodes.size -> {
-                Timber.d("Installed on some devices")
-                startActivity(
-                    SettingsWearMainView.newInstance(applicationContext, wearNodesWithApp, getAuthIntentUrl()),
-                )
-                finish()
-            }
-
-            else -> {
-                Timber.d("Installed on all devices")
-                startActivity(
-                    SettingsWearMainView.newInstance(applicationContext, wearNodesWithApp, getAuthIntentUrl()),
-                )
-                finish()
-            }
-        }
+    private fun openWearDeviceSettings() {
+        val wearNodesWithApp = settingsWearViewModel.wearNodesWithApp.value ?: return
+        startActivity(
+            SettingsWearMainView.newInstance(applicationContext, wearNodesWithApp, getAuthIntentUrl()),
+        )
+        finish()
     }
 
     private fun openPlayStoreOnWearDevicesWithoutApp() {
