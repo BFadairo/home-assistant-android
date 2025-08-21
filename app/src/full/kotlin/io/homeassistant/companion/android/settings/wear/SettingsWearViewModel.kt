@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.DataClient
@@ -14,6 +15,8 @@ import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.Node
+import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -31,6 +34,7 @@ import io.homeassistant.companion.android.database.server.ServerType
 import io.homeassistant.companion.android.database.server.ServerUserInfo
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,12 +55,18 @@ class SettingsWearViewModel @Inject constructor(private val serverManager: Serve
 
     companion object {
         private const val CAPABILITY_WEAR_SENDS_CONFIG = "sends_config"
+        private const val CAPABILITY_WEAR_APP = "verify_wear_app"
     }
 
     private val _hasData = MutableStateFlow(false)
     val hasData = _hasData.asStateFlow()
     private val _isAuthenticated = MutableStateFlow(false)
     val isAuthenticated = _isAuthenticated.asStateFlow()
+    private val _wearNodesWithApp: MutableStateFlow<Set<Node>?> = MutableStateFlow(setOf<Node>())
+    val wearNodesWithApp = _wearNodesWithApp.asStateFlow()
+    private val _allConnectedNodes: MutableStateFlow<List<Node>?> = MutableStateFlow(listOf<Node>())
+    val allConnectedNodes = _allConnectedNodes.asStateFlow()
+
     private var authenticateId: String? = null
     private var serverId = 0
     private var remoteServerId = 0
@@ -299,6 +309,7 @@ class SettingsWearViewModel @Inject constructor(private val serverManager: Serve
                         "/config" -> {
                             onLoadConfigFromWear(DataMapItem.fromDataItem(item).dataMap)
                         }
+
                         WearDataMessages.PATH_LOGIN_RESULT -> {
                             onAuthenticateResult(DataMapItem.fromDataItem(item).dataMap)
                         }
@@ -389,6 +400,7 @@ class SettingsWearViewModel @Inject constructor(private val serverManager: Serve
             }
         }
     }
+
     private fun onAuthenticateResult(data: DataMap) = viewModelScope.launch {
         val id = data.getString(WearDataMessages.KEY_ID, "")
         if (id != authenticateId) return@launch
@@ -409,6 +421,34 @@ class SettingsWearViewModel @Inject constructor(private val serverManager: Serve
     private fun watchConnectionError(app: HomeAssistantApplication) {
         viewModelScope.launch {
             _resultSnackbar.emit(app.getString(commonR.string.failed_watch_connection))
+        }
+    }
+
+    suspend fun findWearDevicesWithApp(capabilityClient: CapabilityClient?) {
+        try {
+            val capabilityInfo = capabilityClient
+                ?.getCapability(CAPABILITY_WEAR_APP, CapabilityClient.FILTER_ALL)
+                ?.await()
+
+            _wearNodesWithApp.value = capabilityInfo?.nodes
+            Timber.d("Capable Nodes: ${wearNodesWithApp.value}")
+        } catch (cancellationException: CancellationException) {
+            // Request was cancelled normally
+            throw cancellationException
+        } catch (throwable: Throwable) {
+            Timber.d("Capability request failed to return any results.")
+        }
+    }
+
+    suspend fun findAllWearDevices(nodeClient: NodeClient?) {
+        try {
+            val connectedNodes = nodeClient?.connectedNodes?.await()
+
+            _allConnectedNodes.value = connectedNodes
+        } catch (cancellationException: CancellationException) {
+            // Request was cancelled normally
+        } catch (throwable: Throwable) {
+            Timber.d("Node request failed to return any results.")
         }
     }
 }

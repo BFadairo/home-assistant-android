@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.concurrent.futures.await
 import androidx.core.net.toUri
@@ -17,33 +18,29 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.CapabilityInfo
-import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.Wearable
+import dagger.hilt.android.AndroidEntryPoint
 import io.homeassistant.companion.android.common.R as commonR
 import io.homeassistant.companion.android.databinding.ActivitySettingsWearBinding
 import io.homeassistant.companion.android.settings.HelpMenuProvider
 import io.homeassistant.companion.android.settings.wear.views.SettingsWearMainView
 import io.homeassistant.companion.android.util.applySafeDrawingInsets
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 
+@AndroidEntryPoint
 class SettingsWearActivity :
     AppCompatActivity(),
     CapabilityClient.OnCapabilityChangedListener {
 
+    private val settingsWearViewModel by viewModels<SettingsWearViewModel>()
     private lateinit var binding: ActivitySettingsWearBinding
 
     private var capabilityClient: CapabilityClient? = null
     private var nodeClient: NodeClient? = null
     private var remoteActivityHelper: RemoteActivityHelper? = null
-
-    private var wearNodesWithApp: Set<Node>? = null
-    private var allConnectedNodes: List<Node>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,14 +85,14 @@ class SettingsWearActivity :
             lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 launch {
                     // Initial request for devices with our capability, aka, our Wear app installed.
-                    findWearDevicesWithApp()
+                    settingsWearViewModel.findWearDevicesWithApp(capabilityClient)
                 }
                 launch {
                     // Initial request for all Wear devices connected (with or without our capability).
                     // Additional Note: Because there isn't a listener for ALL Nodes added/removed from network
                     // that isn't deprecated, we simply update the full list when the Google API Client is
                     // connected and when capability changes come through in the onCapabilityChanged() method.
-                    findAllWearDevices()
+                    settingsWearViewModel.findAllWearDevices(nodeClient)
                 }
             }
         }
@@ -116,52 +113,16 @@ class SettingsWearActivity :
      * Updates UI when capabilities change (install/uninstall wear app).
      */
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
-        wearNodesWithApp = capabilityInfo.nodes
-
         lifecycleScope.launch {
             // Because we have an updated list of devices with/without our app, we need to also update
             // our list of active Wear devices.
-            findAllWearDevices()
-        }
-    }
-
-    private suspend fun findWearDevicesWithApp() {
-        try {
-            val capabilityInfo = capabilityClient
-                ?.getCapability(CAPABILITY_WEAR_APP, CapabilityClient.FILTER_ALL)
-                ?.await()
-
-            withContext(Dispatchers.Main) {
-                wearNodesWithApp = capabilityInfo?.nodes
-                Timber.d("Capable Nodes: $wearNodesWithApp")
-                updateUI()
-            }
-        } catch (cancellationException: CancellationException) {
-            // Request was cancelled normally
-            throw cancellationException
-        } catch (throwable: Throwable) {
-            Timber.d("Capability request failed to return any results.")
-        }
-    }
-
-    private suspend fun findAllWearDevices() {
-        try {
-            val connectedNodes = nodeClient?.connectedNodes?.await()
-
-            withContext(Dispatchers.Main) {
-                allConnectedNodes = connectedNodes
-                updateUI()
-            }
-        } catch (cancellationException: CancellationException) {
-            // Request was cancelled normally
-        } catch (throwable: Throwable) {
-            Timber.d("Node request failed to return any results.")
+            settingsWearViewModel.findAllWearDevices(nodeClient)
         }
     }
 
     private fun updateUI() {
-        val wearNodesWithApp = wearNodesWithApp
-        val allConnectedNodes = allConnectedNodes
+        val wearNodesWithApp = settingsWearViewModel.wearNodesWithApp.value
+        val allConnectedNodes = settingsWearViewModel.allConnectedNodes.value
 
         when {
             wearNodesWithApp == null || allConnectedNodes == null -> {
@@ -169,16 +130,19 @@ class SettingsWearActivity :
                 binding.informationTextView.text = getString(commonR.string.message_checking)
                 binding.remoteOpenButton.isInvisible = true
             }
+
             allConnectedNodes.isEmpty() -> {
                 Timber.d("No devices")
                 binding.informationTextView.text = getString(commonR.string.message_no_connected_nodes)
                 binding.remoteOpenButton.isInvisible = true
             }
+
             wearNodesWithApp.isEmpty() -> {
                 Timber.d("Missing on all devices")
                 binding.informationTextView.text = getString(commonR.string.message_missing_all)
                 binding.remoteOpenButton.isVisible = true
             }
+
             wearNodesWithApp.size < allConnectedNodes.size -> {
                 Timber.d("Installed on some devices")
                 startActivity(
@@ -186,6 +150,7 @@ class SettingsWearActivity :
                 )
                 finish()
             }
+
             else -> {
                 Timber.d("Installed on all devices")
                 startActivity(
@@ -197,8 +162,8 @@ class SettingsWearActivity :
     }
 
     private fun openPlayStoreOnWearDevicesWithoutApp() {
-        val wearNodesWithApp = wearNodesWithApp ?: return
-        val allConnectedNodes = allConnectedNodes ?: return
+        val wearNodesWithApp = settingsWearViewModel.wearNodesWithApp.value ?: return
+        val allConnectedNodes = settingsWearViewModel.allConnectedNodes.value ?: return
 
         // Determine the list of nodes (wear devices) that don't have the app installed yet.
         val nodesWithoutApp = allConnectedNodes - wearNodesWithApp
