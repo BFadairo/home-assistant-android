@@ -1382,7 +1382,7 @@ class WebViewActivity :
 
             "warning" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    vm?.vibrate(VibrationEffect.createOneShot(400, VibrationEffect.EFFECT_HEAVY_CLICK))
+                    vm?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
                 } else {
                     @Suppress("DEPRECATION")
                     vm?.vibrate(1500)
