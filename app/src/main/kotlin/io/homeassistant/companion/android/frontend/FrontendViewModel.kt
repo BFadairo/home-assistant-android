@@ -13,8 +13,11 @@ import io.homeassistant.companion.android.frontend.error.FrontendConnectionError
 import io.homeassistant.companion.android.frontend.error.FrontendConnectionErrorStateProvider
 import io.homeassistant.companion.android.frontend.externalbus.WebViewScript
 import io.homeassistant.companion.android.frontend.externalbus.incoming.HapticType
+import io.homeassistant.companion.android.frontend.handler.FrontendBusObserver
 import io.homeassistant.companion.android.frontend.handler.FrontendHandlerEvent
-import io.homeassistant.companion.android.frontend.handler.FrontendMessageHandler
+import io.homeassistant.companion.android.frontend.js.BridgeState
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridgeFactory
+import io.homeassistant.companion.android.frontend.js.FrontendJsCallback
 import io.homeassistant.companion.android.frontend.navigation.FrontendNavigationEvent
 import io.homeassistant.companion.android.frontend.navigation.FrontendRoute
 import io.homeassistant.companion.android.frontend.permissions.PermissionManager
@@ -61,10 +64,11 @@ internal class FrontendViewModel @VisibleForTesting constructor(
     initialServerId: Int,
     initialPath: String?,
     webViewClientFactory: HAWebViewClientFactory,
-    private val frontendMessageHandler: FrontendMessageHandler,
+    private val frontendBusObserver: FrontendBusObserver,
     private val urlManager: FrontendUrlManager,
     private val connectivityCheckRepository: ConnectivityCheckRepository,
     private val permissionManager: PermissionManager,
+    private val frontendJsBridgeFactory: FrontendJsBridgeFactory,
 ) : ViewModel(),
     FrontendConnectionErrorStateProvider {
 
@@ -72,18 +76,20 @@ internal class FrontendViewModel @VisibleForTesting constructor(
     constructor(
         savedStateHandle: SavedStateHandle,
         webViewClientFactory: HAWebViewClientFactory,
-        frontendMessageHandler: FrontendMessageHandler,
+        frontendBusObserver: FrontendBusObserver,
         urlManager: FrontendUrlManager,
         connectivityCheckRepository: ConnectivityCheckRepository,
         permissionManager: PermissionManager,
+        frontendJsBridgeFactory: FrontendJsBridgeFactory,
     ) : this(
         initialServerId = savedStateHandle.toRoute<FrontendRoute>().serverId,
         initialPath = savedStateHandle.toRoute<FrontendRoute>().path,
         webViewClientFactory = webViewClientFactory,
-        frontendMessageHandler = frontendMessageHandler,
+        frontendBusObserver = frontendBusObserver,
         urlManager = urlManager,
         connectivityCheckRepository = connectivityCheckRepository,
         permissionManager = permissionManager,
+        frontendJsBridgeFactory = frontendJsBridgeFactory,
     )
 
     /**
@@ -147,23 +153,21 @@ internal class FrontendViewModel @VisibleForTesting constructor(
             .stateIn(viewModelScope, SharingStarted.Eagerly, (_viewState.value as? FrontendViewState.Error)?.error)
 
     /** Flow of scripts to be evaluated in the WebView. */
-    val scriptsToEvaluate: Flow<WebViewScript> = frontendMessageHandler.scriptsToEvaluate()
+    val scriptsToEvaluate: Flow<WebViewScript> = frontendBusObserver.scriptsToEvaluate()
 
     /**
      * JavaScript bridge for communication between the WebView and native code.
      *
-     * Must be attached to the WebView via [FrontendJsBridge.attachToWebView].
+     * Must be attached to the WebView via [io.homeassistant.companion.android.frontend.js.FrontendJsBridge.attachToWebView].
      */
-    val frontendJsCallback: FrontendJsCallback = FrontendJsBridge(
-        handler = frontendMessageHandler,
-        serverIdProvider = { viewState.value.serverId },
+    val frontendJsCallback: FrontendJsCallback = frontendJsBridgeFactory.create(
         scope = viewModelScope,
+        stateProvider = { BridgeState(serverId = viewState.value.serverId, url = viewState.value.url) },
     )
 
     val webViewClient: HAWebViewClient = webViewClientFactory.create(
         currentUrlFlow = urlFlow,
         onFrontendError = ::onError,
-        frontendJsCallback = frontendJsCallback,
         onCrash = ::onRetry,
     )
 
@@ -200,7 +204,7 @@ internal class FrontendViewModel @VisibleForTesting constructor(
         }
 
         viewModelScope.launch {
-            frontendMessageHandler.messageResults().collect { result ->
+            frontendBusObserver.messageResults().collect { result ->
                 handleMessageResult(result)
             }
         }
